@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Attitude from "./components/Attitude.jsx";
-import SpeedArc from "./components/SpeedArc.jsx";
 import { useControls } from "./hooks/useControls.js";
 import { useRovSocket } from "./hooks/useRovSocket.js";
 import "./App.css";
@@ -10,11 +9,11 @@ const BRIDGE_PORT = 5003;
 const CAM_PORT = 5000;
 
 const CMD_COL = {
-  FORWARD: "#50d25a",
-  LEFT: "#3c8cff",
-  RIGHT: "#ffaf32",
-  VLVR: "#a564ff",
-  STOP: "#646978",
+  FORWARD: "#3dd68c",
+  LEFT: "#5aa7ff",
+  RIGHT: "#ffb44c",
+  VLVR: "#c084fc",
+  STOP: "#8b93a7",
 };
 
 function pad(n, w = 2) {
@@ -48,10 +47,47 @@ function clamp(v, a, b) {
   return Math.max(a, Math.min(b, v));
 }
 
+function fmt(n, sign = false) {
+  const v = n.toFixed(1);
+  return sign && n >= 0 ? `+${v}` : v;
+}
+
+function StatusDot({ ok, okLabel, badLabel }) {
+  return (
+    <span className={`status ${ok ? "ok" : "bad"}`} title={ok ? okLabel : badLabel}>
+      <i />
+      {ok ? okLabel : badLabel}
+    </span>
+  );
+}
+
+function HoldBtn({ label, hint, mode, hold, release, active }) {
+  const start = (e) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    hold(mode);
+  };
+  return (
+    <button
+      type="button"
+      className={`pad-btn ${active ? "on" : ""}`}
+      aria-label={label}
+      aria-pressed={active}
+      onPointerDown={start}
+      onPointerUp={release}
+      onPointerCancel={release}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {hint}
+    </button>
+  );
+}
+
 export default function App() {
   const [host, setHost] = useState(
     () => localStorage.getItem("rov-pi-host") || DEFAULT_HOST
   );
+  const [hostDraft, setHostDraft] = useState(host);
   const [clock, setClock] = useState(clockStr);
   const [log, setLog] = useState([]);
   const [shotCount, setShotCount] = useState(0);
@@ -60,6 +96,8 @@ export default function App() {
   const [flash, setFlash] = useState(0);
   const [toasts, setToasts] = useState([]);
   const [camOk, setCamOk] = useState(false);
+  const [railOpen, setRailOpen] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [sensors, setSensors] = useState({
     temp: 24,
     hum: 62,
@@ -71,13 +109,14 @@ export default function App() {
   const recRef = useRef(null);
   const recStart = useRef(0);
   const lastMode = useRef("STOP");
+  const hostInput = useRef(null);
 
   const camUrl = `http://${host}:${CAM_PORT}/video`;
   const { wsOk, motorOk, imu, sendCmd } = useRovSocket(host, BRIDGE_PORT);
 
-  const addToast = useCallback((msg, color = "#1dc896") => {
+  const addToast = useCallback((msg, color = "#3dd68c") => {
     const id = Math.random().toString(36).slice(2);
-    setToasts((t) => [...t, { id, msg, color, expire: Date.now() + 3500 }]);
+    setToasts((t) => [...t, { id, msg, color, expire: Date.now() + 3200 }]);
   }, []);
 
   const takeShot = useCallback(() => {
@@ -90,15 +129,15 @@ export default function App() {
     canvas.width = 640;
     canvas.height = 480;
     const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#12141c";
+    ctx.fillStyle = "#0b0d12";
     ctx.fillRect(0, 0, 640, 480);
     try {
       if (cam && cam.naturalWidth) ctx.drawImage(cam, 0, 0, 640, 480);
     } catch {
-      /* canvas tainted without CORS */
+      addToast("Camera blocked screenshot (CORS)", "#ffb44c");
     }
     canvas.toBlob((blob) => blob && downloadBlob(blob, name), "image/jpeg", 0.92);
-    addToast(`■ SCREENSHOT  ${name}`, "#50d25a");
+    addToast(`Screenshot ${name}`, "#3dd68c");
   }, [addToast, shotCount]);
 
   const toggleRecord = useCallback(() => {
@@ -112,12 +151,12 @@ export default function App() {
     canvas.height = 480;
     const ctx = canvas.getContext("2d");
     const timer = setInterval(() => {
-      ctx.fillStyle = "#12141c";
+      ctx.fillStyle = "#0b0d12";
       ctx.fillRect(0, 0, 640, 480);
       try {
         if (cam && cam.naturalWidth) ctx.drawImage(cam, 0, 0, 640, 480);
       } catch {
-        /* canvas tainted without CORS */
+        /* tainted */
       }
     }, 50);
 
@@ -127,7 +166,7 @@ export default function App() {
       recorder = new MediaRecorder(canvas.captureStream(20), mime ? { mimeType: mime } : {});
     } catch {
       clearInterval(timer);
-      addToast("Recording not supported in this browser", "#dc4141");
+      addToast("Recording not supported here", "#ff5d5d");
       return;
     }
     const chunks = [];
@@ -143,16 +182,16 @@ export default function App() {
       const name = `ROV_REC_${fileStamp()}.${ext}`;
       downloadBlob(new Blob(chunks, { type }), name);
       const dur = Math.floor((performance.now() - recStart.current) / 1000);
-      addToast(`■ SAVED ${name}  (${dur}s)`, "#ffaf32");
+      addToast(`Saved ${name} (${dur}s)`, "#ffb44c");
     };
     recorder.start(250);
     recRef.current = recorder;
     recStart.current = performance.now();
     setIsRecording(true);
-    addToast("● REC STARTED", "#dc4141");
+    addToast("Recording", "#ff5d5d");
   }, [addToast]);
 
-  const { hasPad, mode, speed } = useControls({
+  const { hasPad, mode, speed, hold, release } = useControls({
     onRecord: toggleRecord,
     onShot: takeShot,
   });
@@ -202,139 +241,204 @@ export default function App() {
       lastMode.current = mode;
       setLog((rows) => {
         const next = [...rows, { mode, speed, ts: clockStr() }];
-        return next.slice(-8);
+        return next.slice(-10);
       });
     }
   }, [mode, speed, sendCmd]);
 
-  const applyHost = (value) => {
-    const next = value.trim() || DEFAULT_HOST;
+  useEffect(() => {
+    if (window.innerWidth < 960) setRailOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (settingsOpen) hostInput.current?.focus();
+  }, [settingsOpen]);
+
+  const applyHost = () => {
+    const next = hostDraft.trim() || DEFAULT_HOST;
     setCamOk(false);
     setHost(next);
+    setHostDraft(next);
     localStorage.setItem("rov-pi-host", next);
+    setSettingsOpen(false);
   };
 
   const cmdColor = CMD_COL[mode] || CMD_COL.STOP;
   const barPct = (speed - 1000) / 500;
-  const recCol = isRecording ? "#dc4141" : "#5a5f6e";
+  const linked = wsOk && motorOk;
 
   return (
-    <div className="page">
-      <div className="dash" id="dash">
-        <header className="hdr">
-          <div className="hdr-left">
-            <span className={`dot ${motorOk ? "ok" : "bad"}`} />
-            <span className={motorOk ? "ok" : "bad"}>{motorOk ? "MOTOR OK" : "NO MOTOR"}</span>
-            <span className={`link ${wsOk ? "ok" : "bad"}`}>{wsOk ? "WS" : "NO WS"}</span>
-            <span className={`link ${hasPad ? "ok" : ""}`}>{hasPad ? "PAD" : "KEYS"}</span>
-          </div>
-          <h1>ROV  CONTROL  DASHBOARD</h1>
-          <div className="hdr-right">
-            <label className="host">
-              PI
-              <input
-                defaultValue={host}
-                onBlur={(e) => applyHost(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && applyHost(e.target.value)}
-              />
-            </label>
-            <time>{clock}</time>
-          </div>
-        </header>
+    <div className={`shell${railOpen ? " rail-open" : ""}`}>
+      <header className="topbar">
+        <div className="top-left">
+          <StatusDot ok={linked} okLabel="Motors" badLabel="No link" />
+          <StatusDot ok={camOk} okLabel="Camera" badLabel="No camera" />
+          <span className="status muted">{hasPad ? "Gamepad" : "Keyboard"}</span>
+        </div>
+        <div className="brand" aria-hidden="true">
+          ROV
+        </div>
+        <div className="top-right">
+          <time dateTime={clock}>{clock}</time>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Pi address"
+            aria-expanded={settingsOpen}
+            onClick={() => setSettingsOpen((v) => !v)}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className={`icon-btn ${railOpen ? "on" : ""}`}
+            aria-label={railOpen ? "Hide telemetry" : "Show telemetry"}
+            aria-pressed={railOpen}
+            onClick={() => setRailOpen((v) => !v)}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="4" width="7" height="16" rx="1.5" />
+              <rect x="14" y="4" width="7" height="7" rx="1.5" />
+              <rect x="14" y="13" width="7" height="7" rx="1.5" />
+            </svg>
+          </button>
+        </div>
+      </header>
 
-        <section className="cam-wrap">
+      {settingsOpen && (
+        <div className="settings" role="dialog" aria-label="Connection">
+          <label>
+            Raspberry Pi IP
+            <input
+              ref={hostInput}
+              value={hostDraft}
+              onChange={(e) => setHostDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && applyHost()}
+              spellCheck="false"
+              inputMode="decimal"
+            />
+          </label>
+          <button type="button" className="primary" onClick={applyHost}>
+            Connect
+          </button>
+        </div>
+      )}
+
+      <div className="body">
+        <main className="stage">
           <img
             key={camUrl}
             ref={camRef}
             className={camOk ? "cam" : "cam hidden"}
             src={camUrl}
-            alt="ROV camera"
+            alt="ROV live camera"
             onLoad={() => setCamOk(true)}
             onError={() => setCamOk(false)}
           />
           {!camOk && (
-            <div className="cam-wait">waiting for camera  {host}:5000/video</div>
+            <div className="cam-wait">
+              <strong>Waiting for camera</strong>
+              <span>{host}:{CAM_PORT}/video</span>
+            </div>
           )}
-          {flash > 0 && (
-            <div className="flash" style={{ opacity: (flash / 10) * 0.82 }} />
-          )}
+          {flash > 0 && <div className="flash" style={{ opacity: (flash / 10) * 0.78 }} />}
+
+          <div className="scrim top" />
+          <div className="scrim bot" />
+
           {isRecording && (
-            <div className="rec-overlay">
+            <div className="rec-badge" aria-live="polite">
               <span className="rec-dot" />
-              REC  {recLabel}
+              REC {recLabel}
             </div>
           )}
-        </section>
 
-        <div className="btns">
-          <button
-            type="button"
-            className="btn rec"
-            style={{ borderColor: recCol, color: recCol }}
-            onClick={toggleRecord}
-          >
-            <span className={`rec-circle ${isRecording ? "on" : ""}`} style={{ background: isRecording ? recCol : "transparent", borderColor: recCol }} />
-            CIRCLE / R  →  RECORD / STOP
-          </button>
-          <button type="button" className="btn shot" onClick={takeShot}>
-            <span className="sq" />
-            SQUARE / S  →  SCREENSHOT  #{shotCount}
-          </button>
-        </div>
-
-        <div className="toasts">
-          {[...toasts].reverse().map((t) => (
-            <div key={t.id} style={{ color: t.color }}>
-              {t.msg}
+          <div className="hud-att">
+            <Attitude pitch={imu.pitch} roll={imu.roll} radius={52} />
+            <div>
+              <small>PITCH</small>
+              <b className="teal">{fmt(imu.pitch, true)}°</b>
+              <small>ROLL</small>
+              <b className="amber">{fmt(imu.roll, true)}°</b>
             </div>
-          ))}
-        </div>
+          </div>
 
-        <aside className="side">
-          <section className="panel attitude-panel">
-            <h2>ATTITUDE  ·  MPU-6050</h2>
-            <div className="attitude-row">
-              <Attitude pitch={imu.pitch} roll={imu.roll} />
-              <div className="imu-vals">
-                <span className="lbl">PITCH</span>
-                <strong className="teal">
-                  {imu.pitch >= 0 ? "+" : ""}
-                  {imu.pitch.toFixed(1)}°
-                </strong>
-                <span className="lbl">ROLL</span>
-                <strong className="amber">
-                  {imu.roll >= 0 ? "+" : ""}
-                  {imu.roll.toFixed(1)}°
-                </strong>
+          <div className="hud-readouts">
+            <div>
+              <small>DEPTH</small>
+              <b>{sensors.depth.toFixed(1)} m</b>
+            </div>
+            <div>
+              <small>WATER</small>
+              <b>{sensors.wtemp.toFixed(1)}°C</b>
+            </div>
+          </div>
+
+          <div className="hud-cmd">
+            <div className={`cmd-pill${mode === "STOP" ? " stop" : ""}`} style={{ color: cmdColor }}>
+              {mode}
+            </div>
+            <div className="throttle" aria-label={`Throttle ${Math.round(barPct * 100)} percent`}>
+              <span style={{ width: `${Math.max(6, barPct * 100)}%`, background: cmdColor }} />
+            </div>
+            <small>{speed} µs</small>
+          </div>
+
+          <div className="pad" aria-label="Drive">
+            <span />
+            <HoldBtn label="Forward" hint="▲" mode="FORWARD" hold={hold} release={release} active={mode === "FORWARD"} />
+            <span />
+            <HoldBtn label="Left" hint="◀" mode="LEFT" hold={hold} release={release} active={mode === "LEFT"} />
+            <HoldBtn label="Vertical" hint="V" mode="VLVR" hold={hold} release={release} active={mode === "VLVR"} />
+            <HoldBtn label="Right" hint="▶" mode="RIGHT" hold={hold} release={release} active={mode === "RIGHT"} />
+          </div>
+
+          <div className="media-btns">
+            <button
+              type="button"
+              className={`fab rec ${isRecording ? "on" : ""}`}
+              aria-label={isRecording ? "Stop recording" : "Start recording"}
+              title="Record (R)"
+              onClick={toggleRecord}
+            >
+              <span />
+            </button>
+            <button
+              type="button"
+              className="fab shot"
+              aria-label="Take screenshot"
+              title="Screenshot (S)"
+              onClick={takeShot}
+            >
+              <i />
+            </button>
+          </div>
+
+          <div className="toasts" aria-live="polite">
+            {[...toasts].reverse().map((t) => (
+              <div key={t.id} style={{ "--c": t.color }}>
+                {t.msg}
               </div>
-            </div>
-          </section>
+            ))}
+          </div>
+        </main>
 
-          <section className="panel cmd-panel">
-            <h2>COMMAND</h2>
-            <div className="cmd-row">
-              <div className={`cmd-badge${mode === "STOP" ? " stop" : ""}`} style={{ background: cmdColor }}>
-                {mode}
-              </div>
-              <SpeedArc pct={barPct} color={cmdColor} label={speed} />
-            </div>
-            <div className="cmd-meta">
-              {Math.floor(barPct * 100)}%  {speed}us
-            </div>
-          </section>
-
-          <section className="panel env-panel">
-            <h2>ENVIRONMENT  ·  SIMULATED</h2>
+        <aside className="rail" aria-label="Telemetry">
+          <section>
+            <h2>Environment</h2>
             <div className="env-grid">
               {[
-                ["AIR TEMP", `${sensors.temp.toFixed(1)}C`, "#ff823c", sensors.temp / 40],
-                ["HUMIDITY", `${sensors.hum.toFixed(0)}%`, "#50a0ff", sensors.hum / 100],
-                ["WATER TEMP", `${sensors.wtemp.toFixed(1)}C`, "#1dc896", sensors.wtemp / 30],
-                ["DEPTH", `${sensors.depth.toFixed(1)}m`, "#a564ff", sensors.depth / 20],
+                ["Air", `${sensors.temp.toFixed(1)}°C`, "#ff8a4c", sensors.temp / 40],
+                ["Humidity", `${sensors.hum.toFixed(0)}%`, "#5aa7ff", sensors.hum / 100],
+                ["Water", `${sensors.wtemp.toFixed(1)}°C`, "#3dd68c", sensors.wtemp / 30],
+                ["Depth", `${sensors.depth.toFixed(1)} m`, "#c084fc", sensors.depth / 20],
               ].map(([label, val, color, pct]) => (
                 <div key={label} className="env-item">
-                  <span className="lbl">{label}</span>
-                  <span style={{ color }}>{val}</span>
+                  <span>{label}</span>
+                  <strong style={{ color }}>{val}</strong>
                   <div className="bar">
                     <div style={{ width: `${pct * 100}%`, background: color }} />
                   </div>
@@ -343,24 +447,30 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel log-panel">
-            <h2>COMMAND  LOG</h2>
+          <section className="log-sec">
+            <h2>Command log</h2>
             <div className="log">
+              {log.length === 0 && <p className="empty">Drive to see commands</p>}
               {[...log].reverse().map((row, i) => (
                 <div key={`${row.ts}-${i}`} className="log-row">
                   <i style={{ background: CMD_COL[row.mode] || CMD_COL.STOP }} />
-                  <div>
-                    <b style={{ color: CMD_COL[row.mode] || CMD_COL.STOP }}>
-                      {row.mode.padEnd(8)} {row.speed}us
-                    </b>
-                    <span>{row.ts}</span>
-                  </div>
+                  <b style={{ color: CMD_COL[row.mode] || CMD_COL.STOP }}>{row.mode}</b>
+                  <span>{row.speed}µs</span>
+                  <em>{row.ts}</em>
                 </div>
               ))}
             </div>
           </section>
+
+          <p className="hints">
+            {hasPad
+              ? "D-pad drive · R2 throttle · Circle record · Square screenshot"
+              : "WASD drive · V vertical · Shift boost · R record · S screenshot"}
+          </p>
         </aside>
       </div>
+
+      {railOpen && <button type="button" className="sheet-bg" aria-label="Close telemetry" onClick={() => setRailOpen(false)} />}
     </div>
   );
 }

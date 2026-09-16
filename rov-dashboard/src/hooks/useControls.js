@@ -26,6 +26,7 @@ function readPad() {
 
 export function useControls({ onRecord, onShot }) {
   const keys = useRef(Object.create(null));
+  const virt = useRef(null);
   const prev = useRef({ circle: false, square: false });
   const recFn = useRef(onRecord);
   const shotFn = useRef(onShot);
@@ -48,6 +49,7 @@ export function useControls({ onRecord, onShot }) {
     };
     const blur = () => {
       keys.current = Object.create(null);
+      virt.current = null;
     };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
@@ -90,7 +92,8 @@ export function useControls({ onRecord, onShot }) {
         else if (gp.right) next = "RIGHT";
       } else {
         spd = k.ShiftLeft || k.ShiftRight ? 1500 : 1000;
-        if (k.KeyV) next = "VLVR";
+        if (virt.current) next = virt.current;
+        else if (k.KeyV) next = "VLVR";
         else if (k.KeyW || k.ArrowUp) next = "FORWARD";
         else if (k.KeyA || k.ArrowLeft) next = "LEFT";
         else if (k.KeyD || k.ArrowRight) next = "RIGHT";
@@ -103,5 +106,12 @@ export function useControls({ onRecord, onShot }) {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  return { hasPad, mode, speed };
+  const hold = (next) => {
+    virt.current = next;
+  };
+  const release = () => {
+    virt.current = null;
+  };
+
+  return { hasPad, mode, speed, hold, release };
 }
