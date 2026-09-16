@@ -52,9 +52,9 @@ function fmt(n, sign = false) {
   return sign && n >= 0 ? `+${v}` : v;
 }
 
-function StatusDot({ ok, okLabel, badLabel }) {
+function StatusDot({ ok, okLabel, badLabel, hint }) {
   return (
-    <span className={`status ${ok ? "ok" : "bad"}`} title={ok ? okLabel : badLabel}>
+    <span className={`status ${ok ? "ok" : "bad"}`} title={hint || (ok ? okLabel : badLabel)}>
       <i />
       {ok ? okLabel : badLabel}
     </span>
@@ -97,7 +97,6 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [camOk, setCamOk] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [sensors, setSensors] = useState({
     temp: 24,
     hum: 62,
@@ -109,7 +108,6 @@ export default function App() {
   const recRef = useRef(null);
   const recStart = useRef(0);
   const lastMode = useRef("STOP");
-  const hostInput = useRef(null);
 
   const camUrl = `http://${host}:${CAM_PORT}/video`;
   const { wsOk, motorOk, imu, sendCmd } = useRovSocket(host, BRIDGE_PORT);
@@ -191,7 +189,7 @@ export default function App() {
     addToast("Recording", "#ff5d5d");
   }, [addToast]);
 
-  const { hasPad, mode, speed, hold, release } = useControls({
+  const { hasPad, padName, mode, speed, hold, release } = useControls({
     onRecord: toggleRecord,
     onShot: takeShot,
   });
@@ -250,17 +248,13 @@ export default function App() {
     if (window.innerWidth < 960) setRailOpen(false);
   }, []);
 
-  useEffect(() => {
-    if (settingsOpen) hostInput.current?.focus();
-  }, [settingsOpen]);
-
   const applyHost = () => {
     const next = hostDraft.trim() || DEFAULT_HOST;
+    setHostDraft(next);
+    if (next === host) return;
     setCamOk(false);
     setHost(next);
-    setHostDraft(next);
     localStorage.setItem("rov-pi-host", next);
-    setSettingsOpen(false);
   };
 
   const cmdColor = CMD_COL[mode] || CMD_COL.STOP;
@@ -273,25 +267,34 @@ export default function App() {
         <div className="top-left">
           <StatusDot ok={linked} okLabel="Motors" badLabel="No link" />
           <StatusDot ok={camOk} okLabel="Camera" badLabel="No camera" />
-          <span className="status muted">{hasPad ? "Gamepad" : "Keyboard"}</span>
+          <StatusDot
+            ok={hasPad}
+            okLabel={padName ? padName.replace(/\s*\(.*\)$/, "").slice(0, 18) : "Joystick"}
+            badLabel="No joystick"
+            hint={hasPad ? padName : "Press any button on the controller to connect"}
+          />
         </div>
         <div className="brand" aria-hidden="true">
           ROV
         </div>
         <div className="top-right">
-          <time dateTime={clock}>{clock}</time>
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="Pi address"
-            aria-expanded={settingsOpen}
-            onClick={() => setSettingsOpen((v) => !v)}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
-            </svg>
+          <label className="host-field">
+            <span>PI IP</span>
+            <input
+              value={hostDraft}
+              onChange={(e) => setHostDraft(e.target.value)}
+              onBlur={applyHost}
+              onKeyDown={(e) => e.key === "Enter" && applyHost()}
+              spellCheck="false"
+              inputMode="decimal"
+              aria-label="Raspberry Pi IP address"
+              placeholder="192.168.137.10"
+            />
+          </label>
+          <button type="button" className="connect-btn" onClick={applyHost}>
+            Connect
           </button>
+          <time dateTime={clock}>{clock}</time>
           <button
             type="button"
             className={`icon-btn ${railOpen ? "on" : ""}`}
@@ -307,25 +310,6 @@ export default function App() {
           </button>
         </div>
       </header>
-
-      {settingsOpen && (
-        <div className="settings" role="dialog" aria-label="Connection">
-          <label>
-            Raspberry Pi IP
-            <input
-              ref={hostInput}
-              value={hostDraft}
-              onChange={(e) => setHostDraft(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && applyHost()}
-              spellCheck="false"
-              inputMode="decimal"
-            />
-          </label>
-          <button type="button" className="primary" onClick={applyHost}>
-            Connect
-          </button>
-        </div>
-      )}
 
       <div className="body">
         <main className="stage">

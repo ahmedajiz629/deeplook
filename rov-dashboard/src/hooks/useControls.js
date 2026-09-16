@@ -14,6 +14,7 @@ function readPad() {
   if (js.axes.length > 5) throttle = clamp((js.axes[5] + 1) / 2, 0, 1);
   throttle = Math.max(throttle, val(7));
   return {
+    id: js.id || "Gamepad",
     throttle,
     vlvr: btn(0),
     forward: btn(11) || btn(12),
@@ -34,6 +35,7 @@ export function useControls({ onRecord, onShot }) {
   shotFn.current = onShot;
 
   const [hasPad, setHasPad] = useState(false);
+  const [padName, setPadName] = useState("");
   const [mode, setMode] = useState("STOP");
   const [speed, setSpeed] = useState(1000);
 
@@ -54,8 +56,14 @@ export function useControls({ onRecord, onShot }) {
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
     window.addEventListener("blur", blur);
-    const onPad = () => setHasPad(true);
-    const offPad = () => setHasPad(false);
+    const onPad = (e) => {
+      setHasPad(true);
+      setPadName(e.gamepad?.id || "Joystick");
+    };
+    const offPad = () => {
+      setHasPad(false);
+      setPadName("");
+    };
     window.addEventListener("gamepadconnected", onPad);
     window.addEventListener("gamepaddisconnected", offPad);
     return () => {
@@ -72,6 +80,7 @@ export function useControls({ onRecord, onShot }) {
     const tick = () => {
       const gp = readPad();
       setHasPad(!!gp);
+      setPadName(gp ? gp.id : "");
 
       if (gp) {
         if (gp.circle && !prev.current.circle) recFn.current();
@@ -113,5 +122,5 @@ export function useControls({ onRecord, onShot }) {
     virt.current = null;
   };
 
-  return { hasPad, mode, speed, hold, release };
+  return { hasPad, padName, mode, speed, hold, release };
 }
