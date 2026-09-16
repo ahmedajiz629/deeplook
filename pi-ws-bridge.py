@@ -72,6 +72,7 @@ async def motor_loop() -> None:
         try:
             _reader, writer = await asyncio.open_connection(MOTOR_HOST, MOTOR_PORT)
             motor_ok = True
+            last_sent = ""
             print("Motor TCP connected")
             await broadcast({"type": "status", "motor": True, "imu": imu_ok})
             while True:
@@ -85,7 +86,7 @@ async def motor_loop() -> None:
                     continue
                 if not msg.endswith("\n"):
                     msg += "\n"
-                if msg == last_sent and not msg.startswith("STOP"):
+                if msg == last_sent:
                     continue
                 writer.write(msg.encode())
                 await writer.drain()
