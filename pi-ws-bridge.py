@@ -15,8 +15,9 @@ Run:
 
 Endpoints:
     ws://<pi-ip>:5003/ws      motor commands in, IMU + status out
-    http://<pi-ip>:5003/video camera proxy (CORS enabled)
     http://<pi-ip>:5003/health
+
+Camera stays on the existing http://<pi-ip>:5000/video stream.
 """
 
 from __future__ import annotations
@@ -25,13 +26,12 @@ import asyncio
 import json
 import time
 
-from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
+from aiohttp import WSMsgType, web
 
 MOTOR_HOST = "127.0.0.1"
 MOTOR_PORT = 5001
 IMU_HOST = "127.0.0.1"
 IMU_PORT = 5002
-CAM_URL = "http://127.0.0.1:5000/video"
 LISTEN_PORT = 5003
 WATCHDOG_S = 1.0
 CORS = {
@@ -173,30 +173,6 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
-async def video_handler(request: web.Request) -> web.StreamResponse:
-    timeout = ClientTimeout(total=None, sock_connect=5, sock_read=None)
-    async with ClientSession(timeout=timeout) as session:
-        try:
-            async with session.get(CAM_URL) as resp:
-                ctype = resp.headers.get(
-                    "Content-Type", "multipart/x-mixed-replace; boundary=frame"
-                )
-                response = web.StreamResponse(
-                    status=200,
-                    headers={
-                        **CORS,
-                        "Content-Type": ctype,
-                        "Cache-Control": "no-cache, no-store, must-revalidate",
-                    },
-                )
-                await response.prepare(request)
-                async for chunk in resp.content.iter_chunked(4096):
-                    await response.write(chunk)
-                return response
-        except Exception:
-            raise web.HTTPBadGateway(text="camera unavailable")
-
-
 async def health_handler(_request: web.Request) -> web.Response:
     return web.json_response(
         {
@@ -232,7 +208,6 @@ async def on_cleanup(app: web.Application) -> None:
 def main() -> None:
     app = web.Application()
     app.router.add_get("/ws", ws_handler)
-    app.router.add_get("/video", video_handler)
     app.router.add_get("/health", health_handler)
     app.router.add_route("OPTIONS", "/{path:.*}", options_handler)
     app.on_startup.append(on_startup)

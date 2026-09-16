@@ -7,6 +7,7 @@ import "./App.css";
 
 const DEFAULT_HOST = "192.168.137.10";
 const BRIDGE_PORT = 5003;
+const CAM_PORT = 5000;
 
 const CMD_COL = {
   FORWARD: "#50d25a",
@@ -71,7 +72,7 @@ export default function App() {
   const recStart = useRef(0);
   const lastMode = useRef("STOP");
 
-  const camUrl = `http://${host}:${BRIDGE_PORT}/video`;
+  const camUrl = `http://${host}:${CAM_PORT}/video`;
   const { wsOk, motorOk, imu, sendCmd } = useRovSocket(host, BRIDGE_PORT);
 
   const addToast = useCallback((msg, color = "#1dc896") => {
@@ -248,12 +249,11 @@ export default function App() {
             className={camOk ? "cam" : "cam hidden"}
             src={camUrl}
             alt="ROV camera"
-            crossOrigin="anonymous"
             onLoad={() => setCamOk(true)}
             onError={() => setCamOk(false)}
           />
           {!camOk && (
-            <div className="cam-wait">waiting for camera  {host}:5003/video</div>
+            <div className="cam-wait">waiting for camera  {host}:5000/video</div>
           )}
           {flash > 0 && (
             <div className="flash" style={{ opacity: (flash / 10) * 0.82 }} />
