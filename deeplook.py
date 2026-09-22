@@ -146,6 +146,12 @@ def generate_frames():
         )
 
 
+@cam_app.after_request
+def cam_cors(resp):
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
+
+
 @cam_app.route("/video")
 def video():
     return Response(generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame")

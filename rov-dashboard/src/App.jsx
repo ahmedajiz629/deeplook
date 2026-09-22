@@ -40,8 +40,13 @@ function downloadBlob(blob, name) {
 }
 
 function recMime() {
-  const types = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"];
+  const types = ["video/webm;codecs=vp8", "video/webm", "video/webm;codecs=vp9", "video/mp4"];
   return types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+}
+
+function cameraSrc(host) {
+  if (import.meta.env.DEV) return `/rov-cam?host=${encodeURIComponent(host)}`;
+  return `http://${host}:${CAM_PORT}/video`;
 }
 
 function clamp(v, a, b) {
@@ -106,11 +111,13 @@ export default function App() {
   });
 
   const camRef = useRef(null);
+  const recCanvasRef = useRef(null);
   const recRef = useRef(null);
+  const recLoop = useRef(0);
   const recStart = useRef(0);
   const lastMode = useRef("STOP");
 
-  const camUrl = `http://${host}:${CAM_PORT}/video`;
+  const camUrl = cameraSrc(host);
   const { wsOk, motorOk, imu, sendCmd } = useRovSocket(host, BRIDGE_PORT);
 
   const addToast = useCallback((msg, color = "#3dd68c") => {
@@ -141,49 +148,78 @@ export default function App() {
 
   const toggleRecord = useCallback(() => {
     if (recRef.current) {
+      try {
+        recRef.current.requestData();
+      } catch {
+        /* ignore */
+      }
       recRef.current.stop();
       return;
     }
     const cam = camRef.current;
-    const canvas = document.createElement("canvas");
-    canvas.width = 640;
-    canvas.height = 480;
-    const ctx = canvas.getContext("2d");
-    const timer = setInterval(() => {
+    const canvas = recCanvasRef.current;
+    if (!canvas) {
+      addToast("Recorder not ready", "#ff5d5d");
+      return;
+    }
+    const ctx = canvas.getContext("2d", { alpha: false });
+    const paint = () => {
       ctx.fillStyle = "#0b0d12";
-      ctx.fillRect(0, 0, 640, 480);
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       try {
-        if (cam && cam.naturalWidth) ctx.drawImage(cam, 0, 0, 640, 480);
+        if (cam && cam.naturalWidth) ctx.drawImage(cam, 0, 0, canvas.width, canvas.height);
       } catch {
         /* tainted */
       }
-    }, 50);
+    };
+    paint();
 
+    const stream = canvas.captureStream(25);
+    const track = stream.getVideoTracks()[0];
     const mime = recMime();
     let recorder;
     try {
-      recorder = new MediaRecorder(canvas.captureStream(20), mime ? { mimeType: mime } : {});
+      recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
     } catch {
-      clearInterval(timer);
       addToast("Recording not supported here", "#ff5d5d");
       return;
     }
+
+    const draw = () => {
+      paint();
+      if (track && typeof track.requestFrame === "function") track.requestFrame();
+      recLoop.current = requestAnimationFrame(draw);
+    };
+
     const chunks = [];
     recorder.ondataavailable = (e) => {
-      if (e.data.size) chunks.push(e.data);
+      if (e.data && e.data.size) chunks.push(e.data);
     };
-    recorder.onstop = () => {
-      clearInterval(timer);
+    recorder.onerror = () => {
+      cancelAnimationFrame(recLoop.current);
       recRef.current = null;
       setIsRecording(false);
+      addToast("Recording failed", "#ff5d5d");
+    };
+    recorder.onstop = () => {
+      cancelAnimationFrame(recLoop.current);
+      recRef.current = null;
+      setIsRecording(false);
+      track?.stop();
       const type = recorder.mimeType || "video/webm";
       const ext = type.includes("mp4") ? "mp4" : "webm";
       const name = `ROV_REC_${fileStamp()}.${ext}`;
-      downloadBlob(new Blob(chunks, { type }), name);
+      const blob = new Blob(chunks, { type });
+      if (!blob.size) {
+        addToast("Recording was empty — try again", "#ff5d5d");
+        return;
+      }
+      downloadBlob(blob, name);
       const dur = Math.floor((performance.now() - recStart.current) / 1000);
-      addToast(`Saved ${name} (${dur}s)`, "#ffb44c");
+      addToast(`Saved ${name} (${dur}s, ${(blob.size / 1024).toFixed(0)} KB)`, "#ffb44c");
     };
-    recorder.start(250);
+    recLoop.current = requestAnimationFrame(draw);
+    recorder.start(200);
     recRef.current = recorder;
     recStart.current = performance.now();
     setIsRecording(true);
@@ -199,6 +235,14 @@ export default function App() {
     const id = setInterval(() => setClock(clockStr()), 250);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const cam = camRef.current;
+      if (cam && cam.naturalWidth > 0) setCamOk(true);
+    }, 400);
+    return () => clearInterval(id);
+  }, [camUrl]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -318,12 +362,13 @@ export default function App() {
           <img
             key={camUrl}
             ref={camRef}
-            className={camOk ? "cam" : "cam hidden"}
+            className="cam"
             src={camUrl}
             alt="ROV live camera"
             onLoad={() => setCamOk(true)}
             onError={() => setCamOk(false)}
           />
+          <canvas ref={recCanvasRef} className="rec-canvas" width={640} height={480} />
           {!camOk && (
             <div className="cam-wait">
               <strong>Waiting for camera</strong>
