@@ -4,12 +4,13 @@ import { useControls } from "./hooks/useControls.js";
 import { useRovSocket } from "./hooks/useRovSocket.js";
 import "./App.css";
 
-const DEFAULT_HOST = "192.168.137.10";
-const BRIDGE_PORT = 5003;
+const DEFAULT_HOST = "DEEPLOOK-BRAIN.local";
 const CAM_PORT = 5000;
+const BRIDGE_PORT = 5003;
 
 const CMD_COL = {
   FORWARD: "#3dd68c",
+  BACK: "#ff6b6b",
   LEFT: "#5aa7ff",
   RIGHT: "#ffb44c",
   VLVR: "#c084fc",
@@ -85,7 +86,7 @@ function HoldBtn({ label, hint, mode, hold, release, active }) {
 
 export default function App() {
   const [host, setHost] = useState(
-    () => localStorage.getItem("rov-pi-host") || DEFAULT_HOST
+    () => localStorage.getItem("rov-pi-host-v2") || DEFAULT_HOST
   );
   const [hostDraft, setHostDraft] = useState(host);
   const [clock, setClock] = useState(clockStr);
@@ -189,7 +190,7 @@ export default function App() {
     addToast("Recording", "#ff5d5d");
   }, [addToast]);
 
-  const { hasPad, padName, mode, speed, hold, release } = useControls({
+  const { hasPad, padName, mode, speed, throttle, hold, release } = useControls({
     onRecord: toggleRecord,
     onShot: takeShot,
   });
@@ -234,11 +235,12 @@ export default function App() {
   }, [isRecording]);
 
   useEffect(() => {
-    sendCmd(`${mode} ${speed}`);
-    if (mode !== lastMode.current) {
-      lastMode.current = mode;
+    const sent = speed <= 0 ? "STOP" : mode;
+    sendCmd(sent, speed);
+    if (sent !== lastMode.current) {
+      lastMode.current = sent;
       setLog((rows) => {
-        const next = [...rows, { mode, speed, ts: clockStr() }];
+        const next = [...rows, { mode: sent, speed, ts: clockStr() }];
         return next.slice(-10);
       });
     }
@@ -254,18 +256,19 @@ export default function App() {
     if (next === host) return;
     setCamOk(false);
     setHost(next);
-    localStorage.setItem("rov-pi-host", next);
+    localStorage.setItem("rov-pi-host-v2", next);
   };
 
   const cmdColor = CMD_COL[mode] || CMD_COL.STOP;
-  const barPct = (speed - 1000) / 500;
-  const linked = wsOk && motorOk;
+  const barPct = speed <= 0 ? 0 : Math.max(0, (speed - 1000) / 500);
+  const linked = motorOk;
 
   return (
     <div className={`shell${railOpen ? " rail-open" : ""}`}>
       <header className="topbar">
         <div className="top-left">
-          <StatusDot ok={linked} okLabel="Motors" badLabel="No link" />
+          <StatusDot ok={wsOk} okLabel="Link" badLabel="No link" />
+          <StatusDot ok={linked} okLabel="Arduino" badLabel="No Arduino" />
           <StatusDot ok={camOk} okLabel="Camera" badLabel="No camera" />
           <StatusDot
             ok={hasPad}
@@ -286,9 +289,8 @@ export default function App() {
               onBlur={applyHost}
               onKeyDown={(e) => e.key === "Enter" && applyHost()}
               spellCheck="false"
-              inputMode="decimal"
-              aria-label="Raspberry Pi IP address"
-              placeholder="192.168.137.10"
+              aria-label="Raspberry Pi address"
+              placeholder="DEEPLOOK-BRAIN.local"
             />
           </label>
           <button type="button" className="connect-btn" onClick={applyHost}>
@@ -366,9 +368,12 @@ export default function App() {
               {mode}
             </div>
             <div className="throttle" aria-label={`Throttle ${Math.round(barPct * 100)} percent`}>
-              <span style={{ width: `${Math.max(6, barPct * 100)}%`, background: cmdColor }} />
+              <span style={{ width: `${barPct <= 0 ? 0 : Math.max(6, barPct * 100)}%`, background: cmdColor }} />
             </div>
-            <small>{speed} µs</small>
+            <small>
+              {speed} µs
+              {hasPad ? `  ·  R2 ${Math.round(throttle * 100)}%` : ""}
+            </small>
           </div>
 
           <div className="pad" aria-label="Drive">
@@ -378,6 +383,9 @@ export default function App() {
             <HoldBtn label="Left" hint="◀" mode="LEFT" hold={hold} release={release} active={mode === "LEFT"} />
             <HoldBtn label="Vertical" hint="V" mode="VLVR" hold={hold} release={release} active={mode === "VLVR"} />
             <HoldBtn label="Right" hint="▶" mode="RIGHT" hold={hold} release={release} active={mode === "RIGHT"} />
+            <span />
+            <HoldBtn label="Back" hint="▼" mode="BACK" hold={hold} release={release} active={mode === "BACK"} />
+            <span />
           </div>
 
           <div className="media-btns">

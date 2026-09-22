@@ -3,15 +3,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export function useRovSocket(host, port) {
   const [wsOk, setWsOk] = useState(false);
   const [motorOk, setMotorOk] = useState(false);
-  const [imuOk, setImuOk] = useState(false);
   const [imu, setImu] = useState({ pitch: 0, roll: 0 });
   const wsRef = useRef(null);
   const lastSent = useRef("");
-  const pending = useRef("STOP 1000\n");
+  const pending = useRef({ mode: "STOP", speed: 0 });
 
   useEffect(() => {
     let closed = false;
     let retry;
+    let beat;
+    let ping;
 
     const connect = () => {
       if (closed) return;
@@ -21,10 +22,10 @@ export function useRovSocket(host, port) {
       ws.onopen = () => {
         if (closed) return;
         setWsOk(true);
-        if (pending.current) {
-          ws.send(pending.current);
-          lastSent.current = pending.current;
-        }
+        const { mode, speed } = pending.current;
+        const payload = JSON.stringify({ type: "command", mode, speed });
+        lastSent.current = payload;
+        ws.send(payload);
       };
       ws.onclose = () => {
         setWsOk(false);
@@ -35,12 +36,14 @@ export function useRovSocket(host, port) {
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
-          if (msg.type === "imu") {
-            setImu({ pitch: msg.pitch, roll: msg.roll });
-          } else if (msg.type === "status" || msg.type === "hello") {
+          if (msg.type === "telemetry" || msg.type === "imu") {
+            setImu({ pitch: Number(msg.pitch) || 0, roll: Number(msg.roll) || 0 });
+          } else if (msg.type === "hello" || msg.type === "status") {
+            if ("arduino_connected" in msg) setMotorOk(!!msg.arduino_connected);
             if ("motor" in msg) setMotorOk(!!msg.motor);
-            if ("imu" in msg) setImuOk(!!msg.imu);
-            if ("pitch" in msg) setImu({ pitch: msg.pitch, roll: msg.roll });
+            if ("pitch" in msg) {
+              setImu({ pitch: Number(msg.pitch) || 0, roll: Number(msg.roll) || 0 });
+            }
           }
         } catch {
           /* ignore non-JSON */
@@ -49,23 +52,37 @@ export function useRovSocket(host, port) {
     };
 
     connect();
+    beat = setInterval(() => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const { mode, speed } = pending.current;
+      ws.send(JSON.stringify({ type: "command", mode, speed }));
+    }, 80);
+    ping = setInterval(() => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
+    }, 5000);
+
     return () => {
       closed = true;
       clearTimeout(retry);
+      clearInterval(beat);
+      clearInterval(ping);
       wsRef.current?.close();
       wsRef.current = null;
     };
   }, [host, port]);
 
-  const sendCmd = useCallback((cmd) => {
-    const line = cmd.endsWith("\n") ? cmd : `${cmd}\n`;
-    pending.current = line;
+  const sendCmd = useCallback((mode, speed) => {
+    pending.current = { mode, speed };
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    if (line === lastSent.current) return;
-    lastSent.current = line;
-    ws.send(line);
+    const payload = JSON.stringify({ type: "command", mode, speed });
+    if (payload === lastSent.current) return;
+    lastSent.current = payload;
+    ws.send(payload);
   }, []);
 
-  return { wsOk, motorOk, imuOk, imu, sendCmd };
+  return { wsOk, motorOk, imu, sendCmd };
 }

@@ -123,8 +123,8 @@ button, input { font-family: inherit; }
   white-space: nowrap;
 }
 .host-field input {
-  width: 148px;
-  max-width: 28vw;
+  width: 190px;
+  max-width: 36vw;
   height: 32px;
   border-radius: 8px;
   border: 1px solid var(--line);
@@ -338,7 +338,7 @@ button, input { font-family: inherit; }
   bottom: 16px;
   display: grid;
   grid-template-columns: repeat(3, 48px);
-  grid-template-rows: repeat(2, 48px);
+  grid-template-rows: repeat(3, 48px);
   gap: 8px;
   touch-action: none;
 }
