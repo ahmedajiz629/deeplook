@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export function useRovSocket(host, port) {
+function socketUrl() {
+  if (import.meta.env.DEV) return "ws://deeplook.local:5003/ws";
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${proto}://${window.location.host}/ws`;
+}
+
+export function useRovSocket() {
   const [wsOk, setWsOk] = useState(false);
   const [motorOk, setMotorOk] = useState(false);
   const [imu, setImu] = useState({ pitch: 0, roll: 0 });
@@ -16,7 +22,7 @@ export function useRovSocket(host, port) {
 
     const connect = () => {
       if (closed) return;
-      const ws = new WebSocket(`ws://${host}:${port}/ws`);
+      const ws = new WebSocket(socketUrl());
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -72,7 +78,7 @@ export function useRovSocket(host, port) {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [host, port]);
+  }, []);
 
   const sendCmd = useCallback((mode, speed) => {
     pending.current = { mode, speed };

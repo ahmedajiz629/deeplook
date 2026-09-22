@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """
-DeepLook ROV — camera + browser bridge.
+DeepLook ROV — camera + dashboard + browser bridge.
 
 Run on the Raspberry Pi (copied to ~/deeplook.py).
+Dashboard files live in ~/deeplook_web (Vite build).
 
-  Camera  http://<pi>:5000/video     Picamera2 MJPEG (legacy path)
-  Motors  TCP 5001                   pygame / PC dashboard
-  IMU     TCP 5002                   pygame / PC dashboard
-  Bridge  ws://<pi>:5003/ws          React dashboard
-  Health  http://<pi>:5003/health
+  http://deeplook.local/           React dashboard
+  http://deeplook.local/video      Picamera2 MJPEG
+  ws://deeplook.local/ws           React control
+  http://deeplook.local:5000/video legacy pygame camera
+  TCP 5001 / 5002                  pygame motors / IMU
 
 Arduino serial (same as codeparfait soutenence.py):
   out  "<MODE> <SPEED>\\n"     e.g. FORWARD 1320
   in   "IMU <pitch> <roll>\\n"
 
-  python3 -m pip install flask aiohttp pyserial --break-system-packages
+  python3 -m pip install aiohttp pyserial --break-system-packages
   sudo apt install -y python3-picamera2 python3-opencv
 
   python3 ~/deeplook.py
@@ -27,11 +28,11 @@ import json
 import socket
 import threading
 import time
+from pathlib import Path
 
 import cv2
 import serial
 from aiohttp import WSMsgType, web
-from flask import Flask, Response
 from picamera2 import Picamera2
 
 PI_HOST = "0.0.0.0"
@@ -39,10 +40,13 @@ CAM_PORT = 5000
 MOTOR_PORT = 5001
 IMU_PORT = 5002
 BRIDGE_PORT = 5003
+HTTP_PORTS = (80, CAM_PORT, BRIDGE_PORT)
 
 ARDUINO_PORT = "/dev/ttyUSB0"
 ARDUINO_BAUD = 115200
 WATCHDOG_S = 1.0
+
+WEB_ROOT = Path(__file__).resolve().parent / "deeplook_web"
 
 CORS = {
     "Access-Control-Allow-Origin": "*",
@@ -77,6 +81,13 @@ imu_clients_lock = threading.Lock()
 ws_loop: asyncio.AbstractEventLoop | None = None
 ws_clients: set[web.WebSocketResponse] = set()
 cmd_q: asyncio.Queue | None = None
+
+jpeg_lock = threading.Lock()
+latest_jpeg: bytes | None = None
+
+picam2 = Picamera2()
+picam2.configure(picam2.create_video_configuration(main={"size": (640, 480)}))
+picam2.start()
 
 
 def send_serial(payload: bytes) -> None:
@@ -126,35 +137,28 @@ def parse_command(raw: str) -> tuple[str, int] | None:
     return mode, speed
 
 
-# ── Camera (legacy :5000/video) ──────────────────────────────────────────
-cam_app = Flask("deeplook-camera")
-picam2 = Picamera2()
-picam2.configure(picam2.create_video_configuration(main={"size": (640, 480)}))
-picam2.start()
-
-
-def generate_frames():
+def camera_loop() -> None:
+    global latest_jpeg
     while True:
-        frame = picam2.capture_array()
-        frame = cv2.rotate(frame, cv2.ROTATE_180)
-        ok, buffer = cv2.imencode(".jpg", frame)
-        if not ok:
-            continue
-        yield (
-            b"--frame\r\n"
-            b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
-        )
+        try:
+            frame = picam2.capture_array()
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
+            ok, buffer = cv2.imencode(".jpg", frame)
+            if not ok:
+                continue
+            with jpeg_lock:
+                latest_jpeg = buffer.tobytes()
+        except Exception as exc:
+            print("[ERROR] camera:", exc)
+            time.sleep(0.2)
 
 
-@cam_app.after_request
-def cam_cors(resp):
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    return resp
-
-
-@cam_app.route("/video")
-def video():
-    return Response(generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
+def jpeg_chunk() -> bytes | None:
+    with jpeg_lock:
+        jpg = latest_jpeg
+    if not jpg:
+        return None
+    return b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
 
 
 # ── TCP motor :5001 ──────────────────────────────────────────────────────
@@ -348,33 +352,87 @@ async def options_handler(_request: web.Request) -> web.Response:
     return web.Response(headers=CORS)
 
 
-async def run_bridge() -> None:
+async def video_handler(request: web.Request) -> web.StreamResponse:
+    resp = web.StreamResponse(
+        headers={
+            "Content-Type": "multipart/x-mixed-replace; boundary=frame",
+            "Cache-Control": "no-cache, no-store",
+            "Access-Control-Allow-Origin": "*",
+            **CORS,
+        }
+    )
+    await resp.prepare(request)
+    try:
+        while True:
+            chunk = await asyncio.to_thread(jpeg_chunk)
+            if chunk:
+                await resp.write(chunk)
+            else:
+                await asyncio.sleep(0.03)
+    except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError):
+        pass
+    return resp
+
+
+def index_path() -> Path:
+    return WEB_ROOT / "index.html"
+
+
+async def index_handler(_request: web.Request) -> web.StreamResponse:
+    page = index_path()
+    if page.is_file():
+        return web.FileResponse(page)
+    return web.Response(text="Dashboard not installed. Copy the Vite build to deeplook_web.", status=503)
+
+
+async def spa_handler(request: web.Request) -> web.StreamResponse:
+    name = request.match_info.get("tail", "")
+    if name:
+        candidate = (WEB_ROOT / name).resolve()
+        try:
+            candidate.relative_to(WEB_ROOT.resolve())
+        except ValueError:
+            return web.HTTPForbidden()
+        if candidate.is_file():
+            return web.FileResponse(candidate)
+    return await index_handler(request)
+
+
+async def run_http() -> None:
     global ws_loop
     ws_loop = asyncio.get_running_loop()
     app = web.Application()
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/health", health_handler)
+    app.router.add_get("/video", video_handler)
     app.router.add_route("OPTIONS", "/{path:.*}", options_handler)
+    assets = WEB_ROOT / "assets"
+    if assets.is_dir():
+        app.router.add_static("/assets", assets)
+    app.router.add_get("/", index_handler)
+    app.router.add_get("/{tail:.*}", spa_handler)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, PI_HOST, BRIDGE_PORT)
-    await site.start()
-    print("Browser bridge on", BRIDGE_PORT)
+    bound = []
+    for port in HTTP_PORTS:
+        try:
+            site = web.TCPSite(runner, PI_HOST, port)
+            await site.start()
+            bound.append(port)
+        except OSError as exc:
+            print(f"[WARN] HTTP {port}: {exc}")
+    print("HTTP on", bound or "no ports", "→ http://deeplook.local/")
     await asyncio.Event().wait()
 
 
-def bridge_thread() -> None:
-    asyncio.run(run_bridge())
-
-
 def main() -> None:
+    threading.Thread(target=camera_loop, daemon=True).start()
     threading.Thread(target=motor_server, daemon=True).start()
     threading.Thread(target=imu_server, daemon=True).start()
     threading.Thread(target=serial_reader, daemon=True).start()
     threading.Thread(target=watchdog, daemon=True).start()
-    threading.Thread(target=bridge_thread, daemon=True).start()
-    print("Camera on", CAM_PORT, "→ http://0.0.0.0:5000/video")
-    cam_app.run(host=PI_HOST, port=CAM_PORT, threaded=True)
+    print("Camera MJPEG on /video")
+    asyncio.run(run_http())
 
 
 if __name__ == "__main__":

@@ -4,9 +4,7 @@ import { useControls } from "./hooks/useControls.js";
 import { useRovSocket } from "./hooks/useRovSocket.js";
 import "./App.css";
 
-const DEFAULT_HOST = "DEEPLOOK-BRAIN.local";
 const CAM_PORT = 5000;
-const BRIDGE_PORT = 5003;
 
 const CMD_COL = {
   FORWARD: "#3dd68c",
@@ -44,9 +42,9 @@ function recMime() {
   return types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
 }
 
-function cameraSrc(host) {
-  if (import.meta.env.DEV) return `/rov-cam?host=${encodeURIComponent(host)}`;
-  return `http://${host}:${CAM_PORT}/video`;
+function cameraSrc() {
+  if (import.meta.env.DEV) return `http://deeplook.local:${CAM_PORT}/video`;
+  return "/video";
 }
 
 function clamp(v, a, b) {
@@ -90,10 +88,6 @@ function HoldBtn({ label, hint, mode, hold, release, active }) {
 }
 
 export default function App() {
-  const [host, setHost] = useState(
-    () => localStorage.getItem("rov-pi-host-v2") || DEFAULT_HOST
-  );
-  const [hostDraft, setHostDraft] = useState(host);
   const [clock, setClock] = useState(clockStr);
   const [log, setLog] = useState([]);
   const [shotCount, setShotCount] = useState(0);
@@ -117,8 +111,8 @@ export default function App() {
   const recStart = useRef(0);
   const lastMode = useRef("STOP");
 
-  const camUrl = cameraSrc(host);
-  const { wsOk, motorOk, imu, sendCmd } = useRovSocket(host, BRIDGE_PORT);
+  const camUrl = cameraSrc();
+  const { wsOk, motorOk, imu, sendCmd } = useRovSocket();
 
   const addToast = useCallback((msg, color = "#3dd68c") => {
     const id = Math.random().toString(36).slice(2);
@@ -294,15 +288,6 @@ export default function App() {
     if (window.innerWidth < 960) setRailOpen(false);
   }, []);
 
-  const applyHost = () => {
-    const next = hostDraft.trim() || DEFAULT_HOST;
-    setHostDraft(next);
-    if (next === host) return;
-    setCamOk(false);
-    setHost(next);
-    localStorage.setItem("rov-pi-host-v2", next);
-  };
-
   const cmdColor = CMD_COL[mode] || CMD_COL.STOP;
   const barPct = speed <= 0 ? 0 : Math.max(0, (speed - 1000) / 500);
   const linked = motorOk;
@@ -325,21 +310,6 @@ export default function App() {
           ROV
         </div>
         <div className="top-right">
-          <label className="host-field">
-            <span>PI IP</span>
-            <input
-              value={hostDraft}
-              onChange={(e) => setHostDraft(e.target.value)}
-              onBlur={applyHost}
-              onKeyDown={(e) => e.key === "Enter" && applyHost()}
-              spellCheck="false"
-              aria-label="Raspberry Pi address"
-              placeholder="DEEPLOOK-BRAIN.local"
-            />
-          </label>
-          <button type="button" className="connect-btn" onClick={applyHost}>
-            Connect
-          </button>
           <time dateTime={clock}>{clock}</time>
           <button
             type="button"
@@ -372,7 +342,7 @@ export default function App() {
           {!camOk && (
             <div className="cam-wait">
               <strong>Waiting for camera</strong>
-              <span>{host}:{CAM_PORT}/video</span>
+              <span>{camUrl}</span>
             </div>
           )}
           {flash > 0 && <div className="flash" style={{ opacity: (flash / 10) * 0.78 }} />}
