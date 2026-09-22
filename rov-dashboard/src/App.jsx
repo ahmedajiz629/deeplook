@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Attitude from "./components/Attitude.jsx";
 import { useControls } from "./hooks/useControls.js";
+import { cameraSrc } from "./hooks/piOrigin.js";
 import { useRovSocket } from "./hooks/useRovSocket.js";
 import "./App.css";
-
-const CAM_PORT = 5000;
 
 const CMD_COL = {
   FORWARD: "#3dd68c",
@@ -42,11 +41,6 @@ function recMime() {
   return types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
 }
 
-function cameraSrc() {
-  if (import.meta.env.DEV) return `http://deeplook.local:${CAM_PORT}/video`;
-  return "/video";
-}
-
 function clamp(v, a, b) {
   return Math.max(a, Math.min(b, v));
 }
@@ -54,22 +48,6 @@ function clamp(v, a, b) {
 function fmt(n, sign = false) {
   const v = n.toFixed(1);
   return sign && n >= 0 ? `+${v}` : v;
-}
-
-function isStandalone() {
-  return (
-    window.matchMedia("(display-mode: standalone)").matches ||
-    window.navigator.standalone === true
-  );
-}
-
-function installSteps() {
-  const ua = navigator.userAgent;
-  const ios =
-    /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-  if (ios) return "Tap the Share button, then Add to Home Screen.";
-  if (/^((?!chrome|android).)*safari/i.test(ua)) return "File → Add to Dock, or Share → Add to Dock.";
-  return "Open the browser menu and choose Install app.";
 }
 
 function StatusDot({ ok, okLabel, badLabel, hint }) {
@@ -113,9 +91,6 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [camOk, setCamOk] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
-  const [installed, setInstalled] = useState(isStandalone);
-  const [installHelp, setInstallHelp] = useState(false);
-  const installPrompt = useRef(null);
   const [sensors, setSensors] = useState({
     temp: 24,
     hum: 62,
@@ -132,49 +107,6 @@ export default function App() {
 
   const camUrl = cameraSrc();
   const { wsOk, motorOk, imu, sendCmd } = useRovSocket();
-
-  useEffect(() => {
-    const onPrompt = (e) => {
-      e.preventDefault();
-      installPrompt.current = e;
-    };
-    const onInstalled = () => {
-      installPrompt.current = null;
-      setInstalled(true);
-      setInstallHelp(false);
-    };
-    window.addEventListener("beforeinstallprompt", onPrompt);
-    window.addEventListener("appinstalled", onInstalled);
-    const ua = navigator.userAgent;
-    const safari =
-      /iPad|iPhone|iPod/.test(ua) ||
-      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1) ||
-      /^((?!chrome|android).)*safari/i.test(ua);
-    if (safari && !isStandalone() && !sessionStorage.getItem("deeplook-install-seen")) {
-      sessionStorage.setItem("deeplook-install-seen", "1");
-      setInstallHelp(true);
-    }
-    return () => {
-      window.removeEventListener("beforeinstallprompt", onPrompt);
-      window.removeEventListener("appinstalled", onInstalled);
-    };
-  }, []);
-
-  const askInstall = useCallback(async () => {
-    if (isStandalone()) {
-      setInstalled(true);
-      return;
-    }
-    const ev = installPrompt.current;
-    if (ev) {
-      ev.prompt();
-      const choice = await ev.userChoice;
-      installPrompt.current = null;
-      if (choice.outcome === "accepted") setInstalled(true);
-      return;
-    }
-    setInstallHelp((open) => !open);
-  }, []);
 
   const addToast = useCallback((msg, color = "#3dd68c") => {
     const id = Math.random().toString(36).slice(2);
@@ -372,11 +304,6 @@ export default function App() {
           ROV
         </div>
         <div className="top-right">
-          {!installed && (
-            <button type="button" className="install-btn" onClick={askInstall}>
-              Install
-            </button>
-          )}
           <time dateTime={clock}>{clock}</time>
           <button
             type="button"
@@ -393,24 +320,6 @@ export default function App() {
           </button>
         </div>
       </header>
-
-      {installHelp && !installed && (
-        <div className="install-help" role="dialog" aria-label="Install DeepLook">
-          <p>
-            {location.protocol === "https:"
-              ? installSteps()
-              : "Safari will not offer install over HTTP. Open https://deeplook.local/ then tap Share → Add to Home Screen (iPhone) or File → Add to Dock (Mac)."}
-          </p>
-          {location.protocol !== "https:" && (
-            <a className="install-btn" href="https://deeplook.local/">
-              Open https://deeplook.local
-            </a>
-          )}
-          <button type="button" className="install-dismiss" onClick={() => setInstallHelp(false)}>
-            Close
-          </button>
-        </div>
-      )}
 
       <div className="body">
         <main className="stage">

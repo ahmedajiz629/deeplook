@@ -1,0 +1,13 @@
+[build]
+  base = "rov-dashboard"
+  command = "pnpm build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+  VITE_PI_HOST = "deeplook.local"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

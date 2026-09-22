@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-
-function socketUrl() {
-  if (import.meta.env.DEV) return "ws://deeplook.local:5003/ws";
-  const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${window.location.host}/ws`;
-}
+import { socketUrl } from "./piOrigin.js";
 
 export function useRovSocket() {
   const [wsOk, setWsOk] = useState(false);

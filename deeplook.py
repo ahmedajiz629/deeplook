@@ -5,8 +5,7 @@ DeepLook ROV — camera + dashboard + browser bridge.
 Run on the Raspberry Pi (copied to ~/deeplook.py).
 Dashboard files live in ~/deeplook_web (Vite build).
 
-  http://deeplook.local/            React dashboard
-  https://deeplook.local/           PWA (self-signed TLS)
+  http://deeplook.local/            React dashboard (optional local copy)
   http://deeplook.local/video       Picamera2 MJPEG
   ws://deeplook.local/ws            React control
   http://deeplook.local:5000/video legacy pygame camera
@@ -27,8 +26,6 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
-import ssl
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -44,8 +41,6 @@ MOTOR_PORT = 5001
 IMU_PORT = 5002
 BRIDGE_PORT = 5003
 HTTP_PORTS = (80, CAM_PORT, BRIDGE_PORT)
-HTTPS_PORT = 443
-CERT_DIR = Path(__file__).resolve().parent / "deeplook_certs"
 
 ARDUINO_PORT = "/dev/ttyUSB0"
 ARDUINO_BAUD = 115200
@@ -413,42 +408,6 @@ async def spa_handler(request: web.Request) -> web.StreamResponse:
     return await index_handler(request)
 
 
-def ensure_tls() -> tuple[Path, Path] | None:
-    CERT_DIR.mkdir(parents=True, exist_ok=True)
-    cert = CERT_DIR / "cert.pem"
-    key = CERT_DIR / "key.pem"
-    if cert.is_file() and key.is_file():
-        return cert, key
-    try:
-        subprocess.run(
-            [
-                "openssl",
-                "req",
-                "-x509",
-                "-newkey",
-                "rsa:2048",
-                "-keyout",
-                str(key),
-                "-out",
-                str(cert),
-                "-days",
-                "3650",
-                "-nodes",
-                "-subj",
-                "/CN=deeplook.local",
-                "-addext",
-                "subjectAltName=DNS:deeplook.local,DNS:localhost,IP:127.0.0.1",
-            ],
-            check=True,
-            capture_output=True,
-        )
-        print("TLS cert written to", CERT_DIR)
-        return cert, key
-    except Exception as exc:
-        print("[WARN] TLS cert:", exc)
-        return None
-
-
 async def run_http() -> None:
     global ws_loop
     ws_loop = asyncio.get_running_loop()
@@ -472,17 +431,7 @@ async def run_http() -> None:
             bound.append(port)
         except OSError as exc:
             print(f"[WARN] HTTP {port}: {exc}")
-    tls = ensure_tls()
-    if tls:
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.load_cert_chain(tls[0], tls[1])
-        try:
-            site = web.TCPSite(runner, PI_HOST, HTTPS_PORT, ssl_context=ctx)
-            await site.start()
-            bound.append(f"{HTTPS_PORT}/tls")
-        except OSError as exc:
-            print(f"[WARN] HTTPS {HTTPS_PORT}: {exc}")
-    print("HTTP on", bound or "no ports", "→ http://deeplook.local/  https://deeplook.local/")
+    print("HTTP on", bound or "no ports", "→ http://deeplook.local/")
     await asyncio.Event().wait()
 
 
