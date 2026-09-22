@@ -5,9 +5,10 @@ DeepLook ROV — camera + dashboard + browser bridge.
 Run on the Raspberry Pi (copied to ~/deeplook.py).
 Dashboard files live in ~/deeplook_web (Vite build).
 
-  http://deeplook.local/           React dashboard
-  http://deeplook.local/video      Picamera2 MJPEG
-  ws://deeplook.local/ws           React control
+  http://deeplook.local/            React dashboard
+  https://deeplook.local/           PWA (self-signed TLS)
+  http://deeplook.local/video       Picamera2 MJPEG
+  ws://deeplook.local/ws            React control
   http://deeplook.local:5000/video legacy pygame camera
   TCP 5001 / 5002                  pygame motors / IMU
 
@@ -26,6 +27,8 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+import ssl
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -41,6 +44,8 @@ MOTOR_PORT = 5001
 IMU_PORT = 5002
 BRIDGE_PORT = 5003
 HTTP_PORTS = (80, CAM_PORT, BRIDGE_PORT)
+HTTPS_PORT = 443
+CERT_DIR = Path(__file__).resolve().parent / "deeplook_certs"
 
 ARDUINO_PORT = "/dev/ttyUSB0"
 ARDUINO_BAUD = 115200
@@ -385,6 +390,16 @@ async def index_handler(_request: web.Request) -> web.StreamResponse:
     return web.Response(text="Dashboard not installed. Copy the Vite build to deeplook_web.", status=503)
 
 
+def static_headers(name: str) -> dict[str, str]:
+    headers = {}
+    if name in {"sw.js", "registerSW.js"} or name.startswith("workbox-"):
+        headers["Cache-Control"] = "no-cache"
+        headers["Service-Worker-Allowed"] = "/"
+    if name.endswith(".webmanifest") or name.endswith("manifest.webmanifest"):
+        headers["Content-Type"] = "application/manifest+json"
+    return headers
+
+
 async def spa_handler(request: web.Request) -> web.StreamResponse:
     name = request.match_info.get("tail", "")
     if name:
@@ -394,8 +409,44 @@ async def spa_handler(request: web.Request) -> web.StreamResponse:
         except ValueError:
             return web.HTTPForbidden()
         if candidate.is_file():
-            return web.FileResponse(candidate)
+            return web.FileResponse(candidate, headers=static_headers(name))
     return await index_handler(request)
+
+
+def ensure_tls() -> tuple[Path, Path] | None:
+    CERT_DIR.mkdir(parents=True, exist_ok=True)
+    cert = CERT_DIR / "cert.pem"
+    key = CERT_DIR / "key.pem"
+    if cert.is_file() and key.is_file():
+        return cert, key
+    try:
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-keyout",
+                str(key),
+                "-out",
+                str(cert),
+                "-days",
+                "3650",
+                "-nodes",
+                "-subj",
+                "/CN=deeplook.local",
+                "-addext",
+                "subjectAltName=DNS:deeplook.local,DNS:localhost,IP:127.0.0.1",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        print("TLS cert written to", CERT_DIR)
+        return cert, key
+    except Exception as exc:
+        print("[WARN] TLS cert:", exc)
+        return None
 
 
 async def run_http() -> None:
@@ -421,7 +472,17 @@ async def run_http() -> None:
             bound.append(port)
         except OSError as exc:
             print(f"[WARN] HTTP {port}: {exc}")
-    print("HTTP on", bound or "no ports", "→ http://deeplook.local/")
+    tls = ensure_tls()
+    if tls:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(tls[0], tls[1])
+        try:
+            site = web.TCPSite(runner, PI_HOST, HTTPS_PORT, ssl_context=ctx)
+            await site.start()
+            bound.append(f"{HTTPS_PORT}/tls")
+        except OSError as exc:
+            print(f"[WARN] HTTPS {HTTPS_PORT}: {exc}")
+    print("HTTP on", bound or "no ports", "→ http://deeplook.local/  https://deeplook.local/")
     await asyncio.Event().wait()
 
 
